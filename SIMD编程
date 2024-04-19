@@ -1,0 +1,84 @@
+#include <iostream>  
+#include <vector>  
+#include <chrono>  
+#include <cmath>  
+#include <emmintrin.h> // SSE2  
+
+// 平凡算法计算两个浮点向量之间的欧氏距离的平方  
+float plain_euclidean_squared_distance(const float* a, const float* b, int size) {
+    float sum = 0.0f;
+    for (int i = 0; i < size; ++i) {
+        float diff = a[i] - b[i];
+        sum += diff * diff;
+    }
+    return sum;
+}
+
+// SIMD算法计算两个浮点向量之间的欧氏距离的平方，使用SSE2  
+float sse_euclidean_squared_distance(const float* a, const float* b, int size) {
+    const int alignment = 16; // SSE对齐  
+    const int blocks = size / 4; // 每个SSE块处理4个浮点数  
+    __m128 sum = _mm_setzero_ps(); // 初始化累加和为0  
+
+    for (int i = 0; i < blocks; ++i) {
+        __m128 va = _mm_loadu_ps(a + i * 4); // 加载4个浮点数到va  
+        __m128 vb = _mm_loadu_ps(b + i * 4); // 加载4个浮点数到vb  
+        __m128 diff = _mm_sub_ps(va, vb); // 计算差  
+        __m128 diff_squared = _mm_mul_ps(diff, diff); // 计算差的平方  
+        sum = _mm_add_ps(sum, diff_squared); // 累加  
+    }
+
+    // 处理剩余的元素（如果有的话）  
+    for (int i = blocks * 4; i < size; ++i) {
+        float diff = a[i] - b[i];
+        __m128 diff_squared_sse = _mm_set_ss(diff * diff);
+        sum = _mm_add_ss(sum, diff_squared_sse);
+    }
+
+    // 水平相加得到最终的结果  
+    __m128 sum_lower = _mm_add_ps(sum, _mm_shuffle_ps(sum, sum, _MM_SHUFFLE(0, 0, 2, 2))); // 交换并相加  
+    __m128 sum_all = _mm_add_ps(sum_lower, _mm_shuffle_ps(sum_lower, sum_lower, _MM_SHUFFLE(0, 1, 0, 1))); // 交换并相加  
+    float result[4];
+    _mm_store_ss(result, sum_all); // 只存储第一个元素，因为其他元素都是重复的  
+    return result[0]; // 这就是最终结果，因为所有元素都累加到了一起  
+}
+
+int main() {
+    const int size = 200000; // 假设向量大小为1024  
+    const int iterations = 10000; // 测量性能的迭代次数  
+
+    // 生成随机向量  
+    std::vector<float> a(size), b(size);
+    for (int i = 0; i < size; ++i) {
+        a[i] = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        b[i] = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+    }
+    // 预热缓存（可选）  
+    for (int i = 0; i < 10; ++i) {
+        plain_euclidean_squared_distance(a.data(), b.data(), size);
+        sse_euclidean_squared_distance(a.data(), b.data(), size);
+    }
+    // 测量平凡算法的性能  
+    auto plain_start = std::chrono::high_resolution_clock::now();
+    float plain_distance_squared = 0.0f;
+    for (int i = 0; i < iterations; ++i) {
+        plain_distance_squared = plain_euclidean_squared_distance(a.data(), b.data(), size);
+    }
+    auto plain_end = std::chrono::high_resolution_clock::now();
+    auto plain_duration = std::chrono::duration_cast<std::chrono::milliseconds>(plain_end - plain_start).count();
+
+    // 测量SIMD算法的性能  
+    auto sse_start = std::chrono::high_resolution_clock::now();
+    float sse_distance_squared = 0.0f;
+    for (int i = 0; i < iterations; ++i) {
+        sse_distance_squared = sse_euclidean_squared_distance(a.data(), b.data(), size);
+    }
+    auto sse_end = std::chrono::high_resolution_clock::now();
+    auto sse_duration = std::chrono::duration_cast<std::chrono::milliseconds>(sse_end - sse_start).count();
+
+    // 输出结果  
+    std::cout << "Plain algorithm duration: " << plain_duration << " ms" << std::endl;
+    std::cout << "SSE algorithm duration: " << sse_duration << " ms" << std::endl;
+
+    return 0;
+}
